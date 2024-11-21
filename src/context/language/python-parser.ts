@@ -1,22 +1,32 @@
 import { AbstractParser, EnclosingContext } from "../../constants";
 import Parser = require("tree-sitter");
-import Python = require("tree-sitter-python");
-import { Node } from "@babel/traverse";
+import * as Python from "tree-sitter-python";
 
-// Convert TreeSitter node to Babel-compatible node
-const convertToBabelNode = (node: any): Node => {
-  return {
-    ...node,
-    type: node.type,
-    loc: {
-      // Remove the +1 offset to match JavaScript parser behavior
-      start: {
-        line: node.startPosition.row,
-        column: node.startPosition.column,
-      },
-      end: { line: node.endPosition.row, column: node.endPosition.column },
-    },
-  } as Node;
+interface NodePath {
+  type: string;
+  startPosition: { row: number; column: number };
+  endPosition: { row: number; column: number };
+  children: NodePath[];
+}
+
+const processNode = (
+  node: NodePath,
+  lineStart: number,
+  lineEnd: number,
+  largestSize: number,
+  largestEnclosingContext: NodePath | null
+) => {
+  const start = node.startPosition.row + 1; // ast-sitter is 0-based
+  const end = node.endPosition.row + 1;
+
+  if (start <= lineStart && lineEnd <= end) {
+    const size = end - start;
+    if (size > largestSize) {
+      largestSize = size;
+      largestEnclosingContext = node;
+    }
+  }
+  return { largestSize, largestEnclosingContext };
 };
 
 export class PythonParser implements AbstractParser {
@@ -39,37 +49,53 @@ export class PythonParser implements AbstractParser {
   ): EnclosingContext {
     try {
       const ast = this.parser.parse(file);
-      let largestEnclosingContext: Node | null = null;
+      let largestEnclosingContext: NodePath = null;
       let largestSize = 0;
 
-      const visit = (node: any) => {
+      // Function to recursively visit nodes
+      const visit = (node: NodePath) => {
+        // Look for function and class definitions
         if (
           node.type === "function_definition" ||
           node.type === "class_definition"
         ) {
-          // Remove the +1 offset here as well
-          const start = node.startPosition.row;
-          const end = node.endPosition.row;
-
-          if (start <= lineStart && lineEnd <= end) {
-            const size = end - start;
-            if (size > largestSize) {
-              largestSize = size;
-              largestEnclosingContext = convertToBabelNode(node);
-            }
-          }
+          ({ largestSize, largestEnclosingContext } = processNode(
+            node,
+            lineStart,
+            lineEnd,
+            largestSize,
+            largestEnclosingContext
+          ));
         }
 
+        // Visit children
         if (node.children) {
           node.children.forEach(visit);
         }
       };
 
-      visit(ast.rootNode);
+      visit(ast.rootNode as unknown as NodePath);
+
+      // Convert astSitter node to a format compatible with our interface
+      const context = largestEnclosingContext
+        ? {
+            loc: {
+              start: {
+                line: largestEnclosingContext.startPosition.row + 1,
+                column: largestEnclosingContext.startPosition.column,
+              },
+              end: {
+                line: largestEnclosingContext.endPosition.row + 1,
+                column: largestEnclosingContext.endPosition.column,
+              },
+            },
+            type: largestEnclosingContext.type,
+          }
+        : null;
 
       return {
-        enclosingContext: largestEnclosingContext,
-      };
+        enclosingContext: context,
+      } as EnclosingContext;
     } catch (error) {
       console.error("Error parsing Python file:", error);
       return { enclosingContext: null };
@@ -78,12 +104,30 @@ export class PythonParser implements AbstractParser {
 
   dryRun(file: string): { valid: boolean; error: string } {
     try {
-      this.parser.parse(file);
-      return { valid: true, error: "" };
-    } catch (error) {
+      const ast = this.parser.parse(file);
+      // Check if there are any ERROR nodes in the ast
+      let hasError = false;
+      const cursor = ast.rootNode.walk();
+
+      // Walk through all nodes in the ast
+      do {
+        if (cursor.nodeType === "ERROR") {
+          hasError = true;
+          break;
+        }
+      } while (
+        cursor.gotoNextSibling() ||
+        (cursor.gotoParent() && cursor.gotoNextSibling())
+      );
+
+      return {
+        valid: !hasError,
+        error: hasError ? "Syntax error detected in Python code" : "",
+      };
+    } catch (exc) {
       return {
         valid: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: exc.toString(),
       };
     }
   }
