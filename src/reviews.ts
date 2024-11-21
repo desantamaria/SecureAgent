@@ -120,13 +120,14 @@ export const getGitFile = async (
         },
       }
     );
-    //@ts-ignore
     const decodedContent = Buffer.from(
-      response.data.content,
+      (response.data as { content: string }).content,
       "base64"
     ).toString("utf8");
-    //@ts-ignore
-    return { content: decodedContent, sha: response.data.sha };
+    return {
+      content: decodedContent,
+      sha: (response.data as { sha: string }).sha,
+    };
   } catch (exc) {
     if (exc.status === 404) {
       return { content: null, sha: null };

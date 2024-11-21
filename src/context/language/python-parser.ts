@@ -1,89 +1,110 @@
+import { SyntaxNode } from "tree-sitter";
 import { AbstractParser, EnclosingContext } from "../../constants";
-import Parser = require("tree-sitter");
-import Python = require("tree-sitter-python");
-import { Node } from "@babel/traverse";
 
-// Convert TreeSitter node to Babel-compatible node
-const convertToBabelNode = (node: any): Node => {
-  return {
-    ...node,
-    type: node.type,
-    loc: {
-      // Remove the +1 offset to match JavaScript parser behavior
-      start: {
-        line: node.startPosition.row,
-        column: node.startPosition.column,
-      },
-      end: { line: node.endPosition.row, column: node.endPosition.column },
-    },
-  } as Node;
+const Parser = require("tree-sitter");
+const Python = require("tree-sitter-python");
+
+const parser = new Parser();
+parser.setLanguage(Python);
+
+const processNode = (
+  node: SyntaxNode,
+  lineStart: number,
+  lineEnd: number,
+  largestSize: number,
+  largestEnclosingContext: SyntaxNode | null
+) => {
+  const start = node.startPosition;
+  const end = node.endPosition;
+
+  if (start.row <= lineStart && lineEnd <= end.row) {
+    const size = end.row - start.row;
+    if (size > largestSize) {
+      largestSize = size;
+      largestEnclosingContext = node;
+    }
+  }
+  return { largestSize, largestEnclosingContext };
 };
 
 export class PythonParser implements AbstractParser {
-  private parser: Parser;
-
-  constructor() {
-    try {
-      this.parser = new Parser();
-      this.parser.setLanguage(Python);
-    } catch (error) {
-      console.error("Failed to initialize Python parser:", error);
-      throw error;
-    }
-  }
-
   findEnclosingContext(
     file: string,
     lineStart: number,
     lineEnd: number
   ): EnclosingContext {
-    try {
-      const ast = this.parser.parse(file);
-      let largestEnclosingContext: Node | null = null;
-      let largestSize = 0;
+    const tree = parser.parse(file);
 
-      const visit = (node: any) => {
-        if (
-          node.type === "function_definition" ||
-          node.type === "class_definition"
-        ) {
-          // Remove the +1 offset here as well
-          const start = node.startPosition.row;
-          const end = node.endPosition.row;
+    // Print Tree to console
+    console.log("\nTree: \n", tree.rootNode.toString());
+    const callExpression = tree.rootNode.child(1).firstChild;
+    console.log("\nCall Expression:\n", callExpression);
 
-          if (start <= lineStart && lineEnd <= end) {
-            const size = end - start;
-            if (size > largestSize) {
-              largestSize = size;
-              largestEnclosingContext = convertToBabelNode(node);
-            }
-          }
+    let largestEnclosingContext: SyntaxNode = null;
+    let largestSize = 0;
+
+    // Create a cursor for traversing the tree
+    const cursor = tree.rootNode.walk();
+
+    // Traverse the tree
+    let reachedRoot = false;
+    while (!reachedRoot) {
+      const node = cursor.currentNode;
+
+      // Check if this node is a function or class definition
+      if (
+        node.type === "function_definition" ||
+        node.type === "class_definition"
+      ) {
+        const { largestSize: newSize, largestEnclosingContext: newContext } =
+          processNode(
+            node,
+            lineStart,
+            lineEnd,
+            largestSize,
+            largestEnclosingContext
+          );
+        largestSize = newSize;
+        largestEnclosingContext = newContext;
+      }
+
+      // Try to go to first child
+      if (cursor.gotoFirstChild()) {
+        continue;
+      }
+
+      // No children, try to go to next sibling
+      if (cursor.gotoNextSibling()) {
+        continue;
+      }
+
+      // No siblings, go back up to parent and try its siblings
+      while (!reachedRoot) {
+        if (!cursor.gotoParent()) {
+          reachedRoot = true;
+          break;
         }
-
-        if (node.children) {
-          node.children.forEach(visit);
+        if (cursor.gotoNextSibling()) {
+          break;
         }
-      };
-
-      visit(ast.rootNode);
-
-      return {
-        enclosingContext: largestEnclosingContext,
-      };
-    } catch (error) {
-      console.error("Error parsing Python file:", error);
-      return { enclosingContext: null };
+      }
     }
-  }
 
+    return {
+      enclosingContext: largestEnclosingContext,
+    } as EnclosingContext;
+  }
   dryRun(file: string): { valid: boolean; error: string } {
     try {
-      this.parser.parse(file);
-      return { valid: true, error: "" };
-    } catch (error) {
+      const tree = parser.parse(file);
+      return {
+        valid: true,
+        error: "",
+      };
+    } catch (exc) {
       return {
         valid: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: exc,
       };
     }
   }
