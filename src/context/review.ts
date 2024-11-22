@@ -1,12 +1,11 @@
+import { Node } from "@babel/traverse";
+import * as diff from "diff";
 import {
   AbstractParser,
   PRFile,
   PatchInfo,
   getParserForExtension,
 } from "../constants";
-import * as diff from "diff";
-import { JavascriptParser } from "./language/javascript-parser";
-import { Node } from "@babel/traverse";
 
 const expandHunk = (
   contents: string,
@@ -231,7 +230,7 @@ const diffContextPerHunk = (file: PRFile, parser: AbstractParser) => {
       order.push(idx);
     } catch (exc) {
       console.log(file.filename);
-      console.log("NORMAL STRATEGY");
+      console.log(`NORMAL STRATEGY FOR: ${file.filename}`);
       console.log(exc);
       expandStrategy.push(hunk);
       order.push(idx);

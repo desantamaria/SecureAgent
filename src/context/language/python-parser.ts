@@ -34,61 +34,26 @@ export class PythonParser implements AbstractParser {
     lineEnd: number
   ): EnclosingContext {
     const tree = parser.parse(file);
-
-    // Print Tree to console
-    console.log("\nTree: \n", tree.rootNode.toString());
-    const callExpression = tree.rootNode.child(1).firstChild;
-    console.log("\nCall Expression:\n", callExpression);
-
     let largestEnclosingContext: SyntaxNode = null;
     let largestSize = 0;
 
-    // Create a cursor for traversing the tree
-    const cursor = tree.rootNode.walk();
-
-    // Traverse the tree
-    let reachedRoot = false;
-    while (!reachedRoot) {
+    // Traverse syntax tree
+    const cursor = tree.walk();
+    do {
       const node = cursor.currentNode;
-
-      // Check if this node is a function or class definition
       if (
-        node.type === "function_definition" ||
-        node.type === "class_definition"
+        node.type == "function_definition" ||
+        node.type == "class_definition"
       ) {
-        const { largestSize: newSize, largestEnclosingContext: newContext } =
-          processNode(
-            node,
-            lineStart,
-            lineEnd,
-            largestSize,
-            largestEnclosingContext
-          );
-        largestSize = newSize;
-        largestEnclosingContext = newContext;
+        ({ largestSize, largestEnclosingContext } = processNode(
+          node,
+          lineStart,
+          lineEnd,
+          largestSize,
+          largestEnclosingContext
+        ));
       }
-
-      // Try to go to first child
-      if (cursor.gotoFirstChild()) {
-        continue;
-      }
-
-      // No children, try to go to next sibling
-      if (cursor.gotoNextSibling()) {
-        continue;
-      }
-
-      // No siblings, go back up to parent and try its siblings
-      while (!reachedRoot) {
-        if (!cursor.gotoParent()) {
-          reachedRoot = true;
-          break;
-        }
-        if (cursor.gotoNextSibling()) {
-          break;
-        }
-      }
-    }
+    } while (cursor.gotoNextSibling() || cursor.gotoParent());
 
     return {
       enclosingContext: largestEnclosingContext,
